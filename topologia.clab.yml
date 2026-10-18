@@ -1,14 +1,19 @@
-# La red de un banco con sede, centro de datos y dos sucursales, en
-# contenedores (Containerlab). Los routers son FRRouting; los equipos de
-# prueba, Linux con herramientas de red.
+# La red de un banco con sede, centro de datos y dos sucursales, y su salida a
+# internet por dos proveedores, en contenedores (Containerlab). Los routers son
+# FRRouting; los equipos de prueba, Linux con herramientas de red.
 #
 #   sede ──── núcleo, costo 10 ──── cpd (centro de datos)
 #   cada sucursal (suc1, suc2) tiene dos enlaces:
 #     principal → sede, costo 10
 #     respaldo  → cpd,  costo 100 (solo se usa si cae el principal)
+#   internet:
+#     sede → isp1 (proveedor principal)
+#     cpd  → isp2 (proveedor de respaldo)
+#     isp1 y isp2 → nube, donde vive el servidor «web» de internet
 #
-# El plan de direcciones está en README.md. Las direcciones de los routers
-# viven en su frr.conf; las de los equipos, aquí abajo.
+# El plan de direcciones está en README.md y la explicación, en docs/guia.md.
+# Las direcciones de los routers viven en su frr.conf; las de los equipos,
+# aquí abajo.
 name: banco
 
 topology:
@@ -17,65 +22,113 @@ topology:
       image: quay.io/frrouting/frr:10.2.1
 
   nodes:
-    # ── Routers ──
+    # ── Routers del banco ──
+    # A cada router se le quita la ruta por defecto de la red de gestión de
+    # Containerlab (eth0): si no, le ganaría a la que aprende por OSPF o BGP y
+    # el tráfico «a internet» saldría por donde no es.
     sede:
       kind: linux
       binds:
         - configs/daemons:/etc/frr/daemons
         - configs/vtysh.conf:/etc/frr/vtysh.conf
         - configs/sede/frr.conf:/etc/frr/frr.conf
+        - configs/sede/acceso.sh:/etc/frr/acceso.sh
+      exec:
+        # La regla de acceso necesita iptables, que la imagen no trae: se
+        # instala mientras todavía hay salida por eth0.
+        - apk add --no-cache -q iptables
+        - sh /etc/frr/acceso.sh
+        - ip route del default
     cpd:
       kind: linux
       binds:
         - configs/daemons:/etc/frr/daemons
         - configs/vtysh.conf:/etc/frr/vtysh.conf
         - configs/cpd/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
     suc1:
       kind: linux
       binds:
         - configs/daemons:/etc/frr/daemons
         - configs/vtysh.conf:/etc/frr/vtysh.conf
         - configs/suc1/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
     suc2:
       kind: linux
       binds:
         - configs/daemons:/etc/frr/daemons
         - configs/vtysh.conf:/etc/frr/vtysh.conf
         - configs/suc2/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
+
+    # ── Internet: dos proveedores y la «nube» donde vive un servidor web ──
+    isp1:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/isp1/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
+    isp2:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/isp2/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
+    nube:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nube/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
 
     # ── Equipos de prueba: uno por red local ──
-    # Solo las redes del banco (10.0.0.0/8) van por el router; eth0 queda
-    # para la gestión de Containerlab.
+    # Todo su tráfico va por su router (eth1); eth0 es la gestión de
+    # Containerlab y deja de usarse.
     pc-sede:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
         - ip addr add 10.0.1.10/24 dev eth1
-        - ip route add 10.0.0.0/8 via 10.0.1.1
+        - ip route replace default via 10.0.1.1
     admin:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
         - ip addr add 10.0.99.10/24 dev eth1
-        - ip route add 10.0.0.0/8 via 10.0.99.1
+        - ip route replace default via 10.0.99.1
     srv:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
         - ip addr add 10.10.10.10/24 dev eth1
-        - ip route add 10.0.0.0/8 via 10.10.10.1
+        - ip route replace default via 10.10.10.1
     pc-suc1:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
         - ip addr add 10.1.1.10/24 dev eth1
-        - ip route add 10.0.0.0/8 via 10.1.1.1
+        - ip route replace default via 10.1.1.1
     pc-suc2:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
         - ip addr add 10.1.2.10/24 dev eth1
-        - ip route add 10.0.0.0/8 via 10.1.2.1
+        - ip route replace default via 10.1.2.1
+    web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 203.0.113.10/24 dev eth1
+        - ip route replace default via 203.0.113.1
 
   links:
     # Núcleo
@@ -92,3 +145,9 @@ topology:
     - endpoints: ["cpd:eth4", "srv:eth1"]
     - endpoints: ["suc1:eth3", "pc-suc1:eth1"]
     - endpoints: ["suc2:eth3", "pc-suc2:eth1"]
+    # Salida a internet
+    - endpoints: ["sede:eth6", "isp1:eth1"]
+    - endpoints: ["cpd:eth5", "isp2:eth1"]
+    - endpoints: ["isp1:eth2", "nube:eth1"]
+    - endpoints: ["isp2:eth2", "nube:eth2"]
+    - endpoints: ["nube:eth3", "web:eth1"]

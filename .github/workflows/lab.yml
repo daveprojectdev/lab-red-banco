@@ -1,4 +1,5 @@
-# Levanta la red del banco con Containerlab, la prueba y la apaga. El repo es
+# Revisa las configuraciones, levanta la red del banco con Containerlab, la
+# prueba (cortes incluidos) y la apaga. El repo es
 # público, así que GitHub Actions no cobra los minutos. En cada push a main y
 # cada lunes publica el resultado en qa.davidameth.dev con el QA_TOKEN (si no
 # está, se salta sin fallar), como las demás suites.
@@ -28,7 +29,7 @@ env:
 jobs:
   lab:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -45,34 +46,53 @@ jobs:
             -f message="lab-red: en ejecución (${{ github.run_id }})" \
             -f content="$(base64 -w0 en-curso.json)" --silent
 
+      # Antes de levantar nada: si una configuración tiene un error que se ve
+      # leyéndola, la red no se levanta y el resumen lleva solo esta revisión.
+      - name: Revisar las configuraciones
+        id: revision
+        continue-on-error: true
+        run: python3 pruebas/revisar.py
+
       - name: Instalar Containerlab ${{ env.CONTAINERLAB }}
+        if: ${{ steps.revision.outcome == 'success' }}
         run: |
           bash -c "$(curl -sL https://get.containerlab.dev)" -- -v "$CONTAINERLAB"
           containerlab version
 
       - name: Levantar la red
+        if: ${{ steps.revision.outcome == 'success' }}
         run: sudo containerlab deploy -t topologia.clab.yml
 
       - name: Probar
+        if: ${{ steps.revision.outcome == 'success' }}
         run: |
           python3 pruebas/probar.py > resumen.json || true
           jq -r '"\(.pasadas) pasadas, \(.fallidas) fallidas"' resumen.json
 
+      - name: Resumen sin levantar la red
+        if: ${{ steps.revision.outcome != 'success' }}
+        run: python3 pruebas/probar.py --sin-red > resumen.json || true
+
       - name: Estado de los routers (para depurar)
-        if: always()
+        if: ${{ always() && steps.revision.outcome == 'success' }}
         run: |
-          for r in sede cpd suc1 suc2; do
+          for r in sede cpd suc1 suc2 isp1 isp2 nube; do
             echo "::group::$r"
-            docker exec "clab-banco-$r" vtysh -c "show ip ospf neighbor" -c "show ip route" || true
+            docker exec "clab-banco-$r" vtysh -c "show ip ospf neighbor" -c "show bgp summary" -c "show ip route" || true
             echo "::endgroup::"
           done
+          echo "::group::regla de acceso (sede)"
+          docker exec clab-banco-sede iptables -L FORWARD -n -v || true
+          echo "::endgroup::"
 
       - name: Informe
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: resumen-lab-red
-          path: resumen.json
+          path: |
+            resumen.json
+            escena.json
           if-no-files-found: ignore
 
       - name: Publicar en qa.davidameth.dev
@@ -103,5 +123,5 @@ jobs:
           jq -e '.resultado == "pasa"' resumen.json > /dev/null || { jq -r '.fallos[]' resumen.json; exit 1; }
 
       - name: Apagar la red
-        if: always()
+        if: ${{ always() && steps.revision.outcome == 'success' }}
         run: sudo containerlab destroy -t topologia.clab.yml --cleanup || true
