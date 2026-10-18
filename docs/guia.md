@@ -12,7 +12,7 @@ las vuelve a medir en [qa.davidameth.dev](https://qa.davidameth.dev).
 ## 1. En una frase
 
 Es la red de un banco, levantada en contenedores, a la que se le hacen pruebas
-automáticas en cada cambio, igual que al código de una aplicación: si un cambio rompe
+automáticas en cada cambio (incluidos cortes de enlaces y ataques), igual que al código de una aplicación: si un cambio rompe
 el diseño, se ve en rojo antes de aplicarlo.
 
 A esto se le llama **red como código**: la red se describe en archivos de texto
@@ -44,10 +44,15 @@ A esto se le llama **red como código**: la red se describe en archivos de texto
 - **suc1 y suc2:** dos sucursales. Cada una tiene **dos caminos**: el principal va a la
   sede y el de respaldo va directo al centro de datos.
 - **isp1, isp2 y nube:** representan internet. isp1 e isp2 son los dos proveedores del
-  banco, y la nube es «el resto de internet», con un servidor web al que hay que llegar.
+  banco, y la nube es «el resto de internet», con un servidor web al que hay que llegar y
+  un **hacker** que intenta entrar.
+- **socio:** una procesadora de pagos, con línea dedicada al centro de datos. Es el caso
+  real de una empresa externa que da un servicio al banco: tiene que llegar a **un**
+  servidor y a nada más.
 
 Cada red local tiene un **equipo de prueba** (un contenedor Linux) que hace de computadora
-de esa red: `pc-sede`, `admin`, `srv`, `pc-suc1`, `pc-suc2` y `web`.
+de esa red: `pc-sede`, `admin`, `srv`, `pagos`, `pc-suc1`, `pc-suc2`, `web`, `hacker` y
+`pasarela` (la del socio).
 
 ## 3. Las piezas
 
@@ -121,6 +126,30 @@ la red de gestión no entren las sucursales ni internet. Si a alguien le roban u
 en una sucursal, desde ahí no puede llegar a los equipos que administran la red. La sede y
 el centro de datos sí entran.
 
+### El borde con internet: lo que frena al hacker
+
+En la sede y en el centro de datos, donde el banco toca a los proveedores, hay dos defensas:
+
+- **Anti-suplantación.** Desde internet nunca puede llegar un paquete que diga venir de
+  dentro del banco (10.0.0.0/8) ni de redes privadas. Si llega, es un disfraz y se tira.
+  Va en la tabla `raw` de iptables, antes de cualquier otra decisión.
+- **Cortafuegos con estado.** Lo que entra de internet solo pasa si es la **respuesta** a
+  algo que el banco pidió (el cortafuegos recuerda cada conexión: eso es «con estado»), o
+  si va al servicio público, el HTTPS del servidor `srv`. Todo lo demás se descarta en
+  silencio: quien escanea puertos no recibe ni un «no».
+
+### El socio: llegar a uno y a nada más
+
+Dos capas, cada una suficiente por sí sola:
+
+1. **Lo que aprende.** Por BGP, el centro de datos le enseña solo la red de pagos. El socio
+   no sabe que existen las sucursales, la gestión ni internet: no tiene ruta hacia ellas.
+2. **Lo que se le deja pasar.** Una regla en la línea del socio solo permite abrir HTTPS
+   al servidor de pagos. Ni el socio entra a otra cosa, ni el banco abre conexiones hacia él.
+
+Y su red (192.168.50.0/24) nunca se anuncia a los proveedores: el filtro de salida hacia
+ellos solo deja pasar el bloque del banco.
+
 ## 5. Cómo viaja un paquete (medido)
 
 Estos caminos los mide `traceroute` en cada corrida:
@@ -157,6 +186,8 @@ puede salir del código que estás probando.
 | **camino** | El tráfico sale por el enlace y el proveedor principales, confirmado con traceroute. | Un costo mal puesto: **la red funciona, pero por el camino equivocado.** |
 | **alcance** | Ping entre todas las redes y a internet. | Algo que de verdad no llega. |
 | **acceso** | Las sucursales e internet no llegan a gestión; la sede y el centro de datos sí. | Una regla de cortafuegos que no se aplicó. |
+| **ataques** | El hacker no entra a gestión ni a una sucursal; de los servidores solo abre el 443; sus paquetes disfrazados no llegan, y el filtro del borde los cuenta. | Un cortafuegos abierto de más, un filtro anti-suplantación que falta. |
+| **socio** | Solo aprende la red de pagos, su red no sale a internet, llega a pagos por HTTPS y a nada más. | Un filtro de BGP flojo, una regla de la línea dedicada que deja pasar de más. |
 | **caidas** | Se corta un enlace, se mide la pérdida, se comprueba el respaldo y la vuelta. | Un respaldo que no funciona, o que no devuelve el tráfico. |
 
 ## 7. Lo que se encontró construyéndolo
@@ -176,7 +207,15 @@ Estas son buenas historias para una entrevista, porque son reales.
    loopbacks, y FRR espera 120 s para reintentar. Mientras tanto, el centro de datos salía a
    internet por isp2. Dos pruebas de camino lo atraparon. La corrección fue reintentar cada
    5 s (`timers connect 5`).
-4. **Un error frenado antes de desplegar.** El
+4. **Una prueba que no probaba nada.** «El hacker no abre el puerto 80 de los servidores»
+   pasaba desde el principio… porque en ese servidor nada escuchaba en el 80. Pasaba por la
+   razón equivocada. La corrección fue arrancar el servidor web y agregar una prueba previa:
+   que los servidores sí escuchen en 80 y 443, vistos desde ellos mismos. Ahora «cerrado
+   desde fuera» solo puede significar que el cortafuegos lo frenó.
+5. **Defensa en profundidad, comprobada.** Con las defensas quitadas a propósito fallaron 7
+   pruebas. Pero el socio siguió sin llegar a gestión ni a las sucursales: lo frenó la otra
+   capa, la de BGP, porque no conoce el camino.
+6. **Un error frenado antes de desplegar.** El
    [pull request de demostración](https://github.com/daveprojectdev/lab-red-banco/pull/1)
    trae ese mismo costo mal puesto. La revisión previa lo detecta leyendo los archivos y el
    CI se detiene en 5 segundos, sin levantar la red.
@@ -232,6 +271,18 @@ quieta 6 s. Aquí tarda unos 20 s desde que arranca la red.
 Que el tráfico entre dos proveedores pase por tu red. Te consume ancho de banda y no te
 pagan por él. Lo evito anunciando solo mi bloque, y una prueba revisa que ningún proveedor
 aprenda las rutas del otro a través del banco.
+
+**¿Cómo proteges la red de un ataque desde internet?**
+En el borde, con dos cosas. Un filtro anti-suplantación que tira todo paquete que diga venir
+de dentro del banco. Y un cortafuegos con estado que solo deja entrar las respuestas a lo que
+el banco pidió, más el servicio público (HTTPS). Lo pruebo con un hacker en el lab: intenta
+entrar a gestión, escanea puertos y se disfraza de una sucursal, y miro en el servidor que no
+le llegó nada.
+
+**¿Cómo conectas a una empresa externa sin abrirle la red?**
+Con dos capas. Por BGP solo le enseño la red del servidor que necesita, así que no conoce el
+resto. Y en su línea, una regla que solo le deja abrir HTTPS a ese servidor. Probé quitar la
+regla: el socio siguió sin llegar a lo demás, porque la otra capa lo frenaba.
 
 **¿Qué mejorarías?**
 BFD para detectar caídas reales en milisegundos, NAT en la salida, una segunda área de

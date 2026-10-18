@@ -1,10 +1,11 @@
 # Laboratorio de red de un banco, probado como código
 
-La red de un banco con sede central, centro de datos, dos sucursales y salida a
-internet por dos proveedores, levantada en contenedores con
+La red de un banco con sede central, centro de datos, dos sucursales, salida a
+internet por dos proveedores y un socio externo (una procesadora de pagos), levantada en contenedores con
 [Containerlab](https://containerlab.dev) y routers [FRRouting](https://frrouting.org).
 En cada cambio, GitHub Actions revisa las configuraciones, levanta la red completa,
-comprueba que se comporta como dice el diseño (cortando enlaces incluso) y la apaga. Si
+comprueba que se comporta como dice el diseño (cortando enlaces y atacándola incluso) y la
+apaga. Si
 algo no cuadra, el cambio queda en rojo antes de llegar a la red.
 
 Resultados en vivo: **[qa.davidameth.dev](https://qa.davidameth.dev)** · Autor:
@@ -21,7 +22,8 @@ con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
 | `suc2` | Sucursal 2 | 10.255.0.12 | — |
 | `isp1` | Proveedor principal | 100.100.0.1 | 64501 |
 | `isp2` | Proveedor de respaldo | 100.100.0.2 | 64502 |
-| `nube` | Internet, con un servidor `web` | 100.100.0.100 | 64500 |
+| `nube` | Internet, con un servidor `web` y un `hacker` | 100.100.0.100 | 64500 |
+| `socio` | Procesadora de pagos, por línea dedicada al centro de datos | 172.31.255.1 | 65200 |
 
 - **Dentro del banco, OSPF** en un área (0). Núcleo `sede` ↔ `cpd`, costo 10. Cada
   sucursal tiene un enlace principal a la sede (costo 10) y uno de respaldo al centro de
@@ -32,7 +34,15 @@ con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
   alargado con *AS prepend*). A un proveedor solo se le anuncia 10.0.0.0/8: el banco
   nunca hace de tránsito entre los dos.
 - **Regla de acceso:** a la red de gestión (10.0.99.0/24) no entran las sucursales ni
-  internet ([`configs/sede/acceso.sh`](configs/sede/acceso.sh)).
+  internet.
+- **Borde con internet** (en la sede y en el centro de datos): un filtro anti-suplantación
+  descarta todo paquete que diga venir de dentro del banco, y un cortafuegos con estado
+  solo deja pasar respuestas a lo que el banco pidió y el HTTPS del servidor público.
+- **El socio** solo aprende por BGP la red de pagos (10.10.20.0/24) y solo puede abrir
+  HTTPS al servidor de pagos. Su red nunca se anuncia a internet.
+
+Las reglas están en [`configs/sede/acceso.sh`](configs/sede/acceso.sh) y
+[`configs/cpd/acceso.sh`](configs/cpd/acceso.sh).
 
 ### Enlaces punto a punto (/31)
 
@@ -47,6 +57,7 @@ con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
 | Cpd–isp2 | isp2 eth1 100.64.2.0 | cpd eth5 100.64.2.1 | — (BGP) |
 | isp1–nube | isp1 eth2 100.64.11.0 | nube eth1 100.64.11.1 | — (BGP) |
 | isp2–nube | isp2 eth2 100.64.12.0 | nube eth2 100.64.12.1 | — (BGP) |
+| Cpd–socio | socio eth1 172.31.0.0 | cpd eth6 172.31.0.1 | — (BGP) |
 
 ### Redes locales
 
@@ -54,10 +65,13 @@ con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
 |---|---|---|
 | Usuarios de la sede 10.0.1.0/24 | sede eth4 .1 | `pc-sede` .10 |
 | Gestión 10.0.99.0/24 | sede eth5 .1 | `admin` .10 |
-| Servidores 10.10.10.0/24 | cpd eth4 .1 | `srv` .10 |
+| Servidores 10.10.10.0/24 | cpd eth4 .1 | `srv` .10 (HTTPS público) |
+| Pagos 10.10.20.0/24 | cpd eth7 .1 | `pagos` .10 |
 | Sucursal 1 10.1.1.0/24 | suc1 eth3 .1 | `pc-suc1` .10 |
 | Sucursal 2 10.1.2.0/24 | suc2 eth3 .1 | `pc-suc2` .10 |
 | Internet 203.0.113.0/24 | nube eth3 .1 | `web` .10 |
+| Atacante 198.51.100.0/24 | nube eth4 .1 | `hacker` .66 |
+| Socio 192.168.50.0/24 | socio eth2 .1 | `pasarela` .10 |
 
 ## Las pruebas
 
@@ -68,7 +82,7 @@ prueba lo nota en vez de copiar el error.
 1. **Antes de levantar nada,** [`pruebas/revisar.py`](pruebas/revisar.py) lee las
    configuraciones: direcciones e identificadores únicos, cada enlace con sus dos puntas
    y el mismo costo en las dos, redes locales pasivas, vecinos BGP que existen y se
-   responden. Si algo falla, el CI se detiene en segundos sin gastar un contenedor
+   responden, y todo vecino eBGP del banco con filtro de salida. Si algo falla, el CI se detiene en segundos sin gastar un contenedor
    ([ejemplo](https://github.com/daveprojectdev/lab-red-banco/pull/1)).
 2. **Con la red levantada,** [`pruebas/probar.py`](pruebas/probar.py):
    - **ospf** y **bgp:** la red converge, cada vecino está donde debe y no sobra ninguno.
@@ -76,6 +90,12 @@ prueba lo nota en vez de copiar el error.
      el proveedor principales, y traceroute lo confirma salto por salto.
    - **alcance:** los equipos se alcanzan entre sí y llegan a internet.
    - **acceso:** las sucursales e internet no llegan a la red de gestión.
+   - **ataques:** un hacker en internet intenta entrar a gestión y a una sucursal, escanea
+     los puertos de los servidores (solo el 443 público responde) y se disfraza de equipo
+     de la sucursal 1; se comprueba en el servidor que no llegó nada y que el filtro del
+     borde contó los paquetes.
+   - **socio:** solo aprende la red de pagos, su red no sale a internet, llega al servidor
+     de pagos por HTTPS y a nada más.
    - **caidas:** se corta un enlace con pings cada 100 ms, se mide cuánto tráfico se
      pierde hasta que la red usa el respaldo, y se comprueba que vuelve sola al
      principal al reponerlo.
