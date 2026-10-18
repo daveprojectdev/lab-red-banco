@@ -127,9 +127,9 @@ TRAZAS = [
 # Los cortes: (nombre, router, interfaz, desde, hasta, saltos con el respaldo,
 #              pérdida máxima aceptable en segundos, ventana de medición)
 CORTES = [
-    ("principal de la sucursal 1 (sede–suc1)", "sede", "eth2", "pc-suc1", "srv",
+    ("el enlace principal de la sucursal 1 (sede–suc1)", "sede", "eth2", "pc-suc1", "srv",
      ["10.1.1.1", "10.254.0.4", "10.10.10.10"], 3, 15),
-    ("salida a internet por isp1 (sede–isp1)", "sede", "eth6", "pc-suc1", "web",
+    ("el enlace a isp1, la salida principal a internet (sede–isp1)", "sede", "eth6", "pc-suc1", "web",
      ["10.1.1.1", "10.254.0.2", "10.254.0.1", "100.64.2.0", "100.64.12.1", "203.0.113.10"], 15, 40),
 ]
 
@@ -424,9 +424,9 @@ def medir_corte(nombre, router, interfaz, desde, hasta, saltos_respaldo, max_s, 
         if recibidos == 0 or perdida_s > max_s:
             return f"se perdieron {perdida_s} s de tráfico; lo aceptable es {max_s} s"
         return ""
-    anotar("caidas", f"si se corta el {nombre}, {desde} sigue llegando a {hasta} "
+    anotar("caidas", f"si se corta {nombre}, {desde} sigue llegando a {hasta} "
                      f"(se perdieron {perdida_s} s; lo aceptable es {max_s} s)", corte)
-    anotar("caidas", f"sin el {nombre}, el tráfico va por el respaldo: "
+    anotar("caidas", f"sin {nombre}, el tráfico va por el respaldo: "
                      f"{' → '.join(nodos(saltos_respaldo, desde))}",
            lambda: "" if con_respaldo == saltos_respaldo else
            f"saltos {' → '.join(con_respaldo) or '(ninguno)'}; se esperaba {' → '.join(saltos_respaldo)}")
@@ -439,7 +439,7 @@ def medir_corte(nombre, router, interfaz, desde, hasta, saltos_respaldo, max_s, 
     de_vuelta = traza(desde, hasta)
     registro["repuesto"] = nodos(de_vuelta, desde)
     principal = registro["antes"]
-    anotar("caidas", f"al reponer el {nombre}, la red vuelve sola al camino principal",
+    anotar("caidas", f"al reponer {nombre}, la red vuelve sola al camino principal",
            lambda: "" if convergio and nodos(de_vuelta, desde) == principal else
            f"{'no convergió; ' if not convergio else ''}saltos {' → '.join(registro['repuesto'])}; "
            f"se esperaba {' → '.join(principal)}")
