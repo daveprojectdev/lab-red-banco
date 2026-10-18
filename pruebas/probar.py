@@ -85,6 +85,7 @@ TRAZAS = [
 ]
 
 CONVERGENCIA_MAX_S = 120
+ESTABLE_S = 6  # la tabla de rutas tiene que quedarse quieta este tiempo
 
 # ── Herramientas ──
 
@@ -126,6 +127,46 @@ def todos_full() -> bool:
         return True
     except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired):
         return False
+
+
+def foto_de_rutas() -> dict | None:
+    """Las rutas OSPF elegidas de cada router y por dónde salen, o None si a
+    alguno le falta una red del diseño."""
+    foto = {}
+    try:
+        for router in REDES:
+            tabla = vtysh(router, "show ip route ospf json")
+            elegidas = {
+                red: sorted(h.get("interfaceName", "") for e in entradas if e.get("selected")
+                            for h in e.get("nexthops", []) if h.get("active"))
+                for red, entradas in tabla.items()
+            }
+            ajenas = [red for otro, redes in REDES.items() if otro != router for red in redes]
+            if any(not elegidas.get(red) for red in ajenas):
+                return None
+            foto[router] = elegidas
+    except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired):
+        return None
+    return foto
+
+
+def esperar_convergencia() -> tuple[bool, float]:
+    """Convergida = vecinos en Full, todas las rutas del diseño y la tabla de
+    rutas quieta durante ESTABLE_S. Solo con Full no basta: el primer día las
+    pruebas corrieron con los vecinos en Full y el centro de datos todavía
+    mandaba el tráfico por el respaldo; las rutas buenas entraron segundos
+    después. Devuelve (convergió, segundos hasta el último cambio)."""
+    t0 = time.monotonic()
+    anterior, ultimo_cambio = None, t0
+    while time.monotonic() - t0 < CONVERGENCIA_MAX_S:
+        foto = foto_de_rutas() if todos_full() else None
+        ahora = time.monotonic()
+        if foto != anterior:
+            anterior, ultimo_cambio = foto, ahora
+        elif foto is not None and ahora - ultimo_cambio >= ESTABLE_S:
+            return True, ultimo_cambio - t0
+        time.sleep(1)
+    return False, time.monotonic() - t0
 
 
 # ── Registro de resultados ──
@@ -222,14 +263,12 @@ def main() -> int:
     comienzo = time.monotonic()
 
     print("Esperando a que OSPF converja…", file=sys.stderr)
-    t0 = time.monotonic()
-    while not todos_full() and time.monotonic() - t0 < CONVERGENCIA_MAX_S:
-        time.sleep(2)
-    convergencia = round(time.monotonic() - t0)
-    convergio = todos_full()
+    convergio, segundos = esperar_convergencia()
+    convergencia = round(segundos)
     print(f"  {'convergió' if convergio else 'NO convergió'} en {convergencia} s", file=sys.stderr)
     anotar("ospf", f"OSPF converge en menos de {CONVERGENCIA_MAX_S} s (tardó {convergencia} s)",
-           lambda: "" if convergio else f"tras {convergencia} s no todos los vecinos están en Full")
+           lambda: "" if convergio else
+           f"tras {convergencia} s faltan vecinos en Full o rutas del diseño, o la tabla no se queda quieta")
 
     for router in VECINOS:
         n = len(VECINOS[router])
