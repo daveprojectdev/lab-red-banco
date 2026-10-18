@@ -1,0 +1,94 @@
+# La red de un banco con sede, centro de datos y dos sucursales, en
+# contenedores (Containerlab). Los routers son FRRouting; los equipos de
+# prueba, Linux con herramientas de red.
+#
+#   sede ──── núcleo, costo 10 ──── cpd (centro de datos)
+#   cada sucursal (suc1, suc2) tiene dos enlaces:
+#     principal → sede, costo 10
+#     respaldo  → cpd,  costo 100 (solo se usa si cae el principal)
+#
+# El plan de direcciones está en README.md. Las direcciones de los routers
+# viven en su frr.conf; las de los equipos, aquí abajo.
+name: banco
+
+topology:
+  kinds:
+    linux:
+      image: quay.io/frrouting/frr:10.2.1
+
+  nodes:
+    # ── Routers ──
+    sede:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/sede/frr.conf:/etc/frr/frr.conf
+    cpd:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/cpd/frr.conf:/etc/frr/frr.conf
+    suc1:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/suc1/frr.conf:/etc/frr/frr.conf
+    suc2:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/suc2/frr.conf:/etc/frr/frr.conf
+
+    # ── Equipos de prueba: uno por red local ──
+    # Solo las redes del banco (10.0.0.0/8) van por el router; eth0 queda
+    # para la gestión de Containerlab.
+    pc-sede:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 10.0.1.10/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.0.1.1
+    admin:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 10.0.99.10/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.0.99.1
+    srv:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 10.10.10.10/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.10.10.1
+    pc-suc1:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 10.1.1.10/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.1.1.1
+    pc-suc2:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 10.1.2.10/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.1.2.1
+
+  links:
+    # Núcleo
+    - endpoints: ["sede:eth1", "cpd:eth1"]
+    # Sucursal 1: principal a la sede, respaldo al centro de datos
+    - endpoints: ["sede:eth2", "suc1:eth1"]
+    - endpoints: ["cpd:eth2", "suc1:eth2"]
+    # Sucursal 2: igual
+    - endpoints: ["sede:eth3", "suc2:eth1"]
+    - endpoints: ["cpd:eth3", "suc2:eth2"]
+    # Redes locales
+    - endpoints: ["sede:eth4", "pc-sede:eth1"]
+    - endpoints: ["sede:eth5", "admin:eth1"]
+    - endpoints: ["cpd:eth4", "srv:eth1"]
+    - endpoints: ["suc1:eth3", "pc-suc1:eth1"]
+    - endpoints: ["suc2:eth3", "pc-suc2:eth1"]

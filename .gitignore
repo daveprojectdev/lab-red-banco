@@ -1,0 +1,8 @@
+# Lo que deja Containerlab al levantar la red
+clab-*/
+.topologia.clab.yml.bak
+*.clab.yml.bak
+# Resultados locales y secretos
+resumen.json
+.env*
+__pycache__/

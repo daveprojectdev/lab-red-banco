@@ -1,0 +1,2 @@
+# Siempre LF: FRRouting y bash no leen bien los CRLF de Windows.
+* text=auto eol=lf

@@ -1,0 +1,107 @@
+# Levanta la red del banco con Containerlab, la prueba y la apaga. El repo es
+# público, así que GitHub Actions no cobra los minutos. En cada push a main y
+# cada lunes publica el resultado en qa.davidameth.dev con el QA_TOKEN (si no
+# está, se salta sin fallar), como las demás suites.
+name: Lab de red
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 11 * * 1" # lunes 06:00 en Panamá (UTC-5)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lab-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONTAINERLAB: "0.68.0"
+  QA_TOKEN: ${{ secrets.QA_TOKEN }}
+  # Solo main publica: un pull request es para frenar errores, no para el historial.
+  PUBLICA: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+
+jobs:
+  lab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Avisar a qa.davidameth.dev que empezó
+        continue-on-error: true
+        if: ${{ env.QA_TOKEN != '' && env.PUBLICA == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.QA_TOKEN }}
+        run: |
+          printf '{"suite":"lab-red","fecha":"%s","commit":"%s","corrida":"%s"}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${GITHUB_SHA::7}" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > en-curso.json
+          gh api -X PUT "repos/daveprojectdev/qa/contents/data/en-curso/lab-red/${{ github.run_id }}-${{ github.run_attempt }}.json" \
+            -f message="lab-red: en ejecución (${{ github.run_id }})" \
+            -f content="$(base64 -w0 en-curso.json)" --silent
+
+      - name: Instalar Containerlab ${{ env.CONTAINERLAB }}
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)" -- -v "$CONTAINERLAB"
+          containerlab version
+
+      - name: Levantar la red
+        run: sudo containerlab deploy -t topologia.clab.yml
+
+      - name: Probar
+        run: |
+          python3 pruebas/probar.py > resumen.json || true
+          jq -r '"\(.pasadas) pasadas, \(.fallidas) fallidas"' resumen.json
+
+      - name: Estado de los routers (para depurar)
+        if: always()
+        run: |
+          for r in sede cpd suc1 suc2; do
+            echo "::group::$r"
+            docker exec "clab-banco-$r" vtysh -c "show ip ospf neighbor" -c "show ip route" || true
+            echo "::endgroup::"
+          done
+
+      - name: Informe
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: resumen-lab-red
+          path: resumen.json
+          if-no-files-found: ignore
+
+      - name: Publicar en qa.davidameth.dev
+        continue-on-error: true
+        if: ${{ !cancelled() && env.QA_TOKEN != '' && env.PUBLICA == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.QA_TOKEN }}
+        run: |
+          test -s resumen.json || { echo "No hay resumen."; exit 0; }
+          nombre="$(date -u +%Y%m%dT%H%M%SZ)-${{ github.run_id }}-${{ github.run_attempt }}.json"
+          gh api -X PUT "repos/daveprojectdev/qa/contents/data/corridas/lab-red/$nombre" \
+            -f message="lab-red: $(jq -r .resultado resumen.json) (${{ github.run_id }})" \
+            -f content="$(base64 -w0 resumen.json)" --silent
+
+      - name: Quitar el aviso de qa.davidameth.dev
+        continue-on-error: true
+        if: ${{ always() && env.QA_TOKEN != '' && env.PUBLICA == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.QA_TOKEN }}
+        run: |
+          ruta="repos/daveprojectdev/qa/contents/data/en-curso/lab-red/${{ github.run_id }}-${{ github.run_attempt }}.json"
+          sha=$(gh api "$ruta" --jq .sha 2>/dev/null) || { echo "No había aviso."; exit 0; }
+          gh api -X DELETE "$ruta" -f message="lab-red: terminó (${{ github.run_id }})" -f sha="$sha" --silent
+
+      # Ya publicado: si algo falló, la corrida queda en rojo.
+      - name: Resultado
+        run: |
+          jq -e '.resultado == "pasa"' resumen.json > /dev/null || { jq -r '.fallos[]' resumen.json; exit 1; }
+
+      - name: Apagar la red
+        if: always()
+        run: sudo containerlab destroy -t topologia.clab.yml --cleanup || true

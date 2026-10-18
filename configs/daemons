@@ -1,0 +1,24 @@
+# Qué procesos de FRRouting arrancan en cada router. Fase 1: solo OSPF
+# (zebra y staticd arrancan siempre). En la fase 2 se enciende bgpd.
+bgpd=no
+ospfd=yes
+ospf6d=no
+ripd=no
+ripngd=no
+isisd=no
+pimd=no
+ldpd=no
+nhrpd=no
+eigrpd=no
+babeld=no
+sharpd=no
+pbrd=no
+bfdd=no
+fabricd=no
+vrrpd=no
+pathd=no
+
+vtysh_enable=yes
+zebra_options="  -A 127.0.0.1 -s 90000000"
+ospfd_options="  -A 127.0.0.1"
+staticd_options="-A 127.0.0.1"
