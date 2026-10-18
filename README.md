@@ -10,7 +10,7 @@ algo no cuadra, el cambio queda en rojo antes de llegar a la red.
 
 Resultados en vivo: **[qa.davidameth.dev](https://qa.davidameth.dev)** · Autor:
 [David Ameth Martínez Sánchez](https://davidameth.dev) · La explicación paso a paso,
-con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
+con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)** · La arquitectura técnica, por dominios y con sus decisiones: **[docs/arquitectura-tecnica.md](docs/arquitectura-tecnica.md)** · La ciudad en 3D que reproduce la última corrida: **[davidameth.dev/proyectos/lab-red](https://davidameth.dev/proyectos/lab-red/)**
 
 ## La red
 
