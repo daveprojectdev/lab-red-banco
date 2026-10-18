@@ -115,6 +115,21 @@ jobs:
             -f message="lab-red: $(jq -r .resultado resumen.json) (${{ github.run_id }})" \
             -f content="$(base64 -w0 resumen.json)" --silent
 
+      # La escena (los caminos medidos antes y después de cada corte, los ataques y
+      # el socio) reemplaza a la anterior: la vista de davidameth.dev siempre
+      # dibuja la última corrida.
+      - name: Publicar la escena en qa.davidameth.dev
+        continue-on-error: true
+        if: ${{ !cancelled() && env.QA_TOKEN != '' && env.PUBLICA == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.QA_TOKEN }}
+        run: |
+          test -s escena.json || { echo "No hay escena."; exit 0; }
+          jq -e '.resultado == "pasa"' resumen.json > /dev/null || { echo "La corrida falló: se deja la escena anterior."; exit 0; }
+          ruta="repos/daveprojectdev/qa/contents/data/escenas/lab-red.json"
+          sha=$(gh api "$ruta" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "$ruta" -f message="lab-red: escena (${{ github.run_id }})"             -f content="$(base64 -w0 escena.json)" ${sha:+-f sha="$sha"} --silent
+
       - name: Quitar el aviso de qa.davidameth.dev
         continue-on-error: true
         if: ${{ always() && env.QA_TOKEN != '' && env.PUBLICA == 'true' }}
