@@ -81,7 +81,7 @@ jobs:
             docker exec "clab-banco-$r" vtysh -c "show ip ospf neighbor" -c "show bgp summary" -c "show ip route" || true
             echo "::endgroup::"
           done
-          for e in srv pagos; do
+          for e in srv autorizador; do
             echo "::group::puertos abiertos ($e)"
             docker exec "clab-banco-$e" sh -c "netstat -tln || ss -tln" || true
             echo "::endgroup::"

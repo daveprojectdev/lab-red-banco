@@ -15,8 +15,8 @@ Grupos, en el orden en que corren:
 - acceso: las sucursales e internet NO llegan a la red de gestión.
 - ataques: un hacker en internet intenta entrar a gestión y a una sucursal,
   escanea los puertos de los servidores y se disfraza de equipo del banco.
-- socio: la procesadora de pagos solo aprende y solo alcanza el servidor de
-  pagos, por HTTPS; su red no se filtra a internet.
+- socio: la red de cajeros solo aprende y solo alcanza el servidor
+  autorizador, por HTTPS; su red no se filtra a internet.
 - caidas: se corta un enlace, se mide cuánto tráfico se pierde hasta que la
   red usa el respaldo, y se comprueba que vuelve sola al principal.
 
@@ -99,8 +99,8 @@ EQUIPOS = {
     "pc-suc1": "10.1.1.10",
     "pc-suc2": "10.1.2.10",
     "web": "203.0.113.10",
-    "pagos": "10.10.20.10",
-    "pasarela": "192.168.50.10",
+    "autorizador": "10.10.20.10",
+    "cajeros": "192.168.50.10",
     "hacker": "198.51.100.66",
 }
 PINGS = [
@@ -127,14 +127,14 @@ ATAQUES = [
     ("hacer ping a los servidores", "srv", None, False),
     ("abrir el puerto 80 de los servidores", "srv", 80, False),
     ("abrir el puerto 443 de los servidores (el servicio público)", "srv", 443, True),
-    ("abrir el servidor de pagos", "pagos", 443, False),
+    ("abrir el servidor autorizador", "autorizador", 443, False),
 ]
 DISFRAZ = "10.1.1.99"  # la dirección de la sucursal 1 que el hacker finge tener
 
-# El socio, desde su servidor «pasarela»: (hasta, puerto o None, ¿debe pasar?)
+# El socio, desde su servidor «cajeros»: (hasta, puerto o None, ¿debe pasar?)
 SOCIO = [
-    ("pagos", 443, True),
-    ("pagos", 80, False),
+    ("autorizador", 443, True),
+    ("autorizador", 80, False),
     ("srv", 443, False),
     ("admin", None, False),
     ("pc-suc1", None, False),
@@ -445,7 +445,7 @@ def prueba_intento(lista: str, desde: str, hasta: str, puerto, debe_pasar: bool,
 
 
 def prueba_escuchan():
-    faltan = [f"{equipo}:{puerto}" for equipo in ("srv", "pagos") for puerto in (80, 443)
+    faltan = [f"{equipo}:{puerto}" for equipo in ("srv", "autorizador") for puerto in (80, 443)
               if ejecutar(equipo, "timeout", "3", "bash", "-c", f"</dev/tcp/127.0.0.1/{puerto}").returncode != 0]
     return f"no escuchan: {', '.join(faltan)}" if faltan else ""
 
@@ -620,14 +620,14 @@ def main() -> int:
             anotar("ataques", f"el hacker intenta {que}: {'pasa' if debe else 'se lo frena'}",
                    prueba_intento("ataques", "hacker", hasta, puerto, debe, que))
         probar_suplantacion()
-        anotar("socio", "el socio solo aprende del banco la red de pagos", prueba_socio_aprende)
+        anotar("socio", "el socio solo aprende del banco la red del autorizador", prueba_socio_aprende)
         anotar("socio", "la red del socio no se anuncia a internet", prueba_socio_no_se_filtra)
         for hasta, puerto, debe in SOCIO:
             destino = f"{hasta}{f' por el puerto {puerto}' if puerto else ''}"
             anotar("socio", f"el socio {'llega' if debe else 'NO llega'} a {destino}",
-                   prueba_intento("socio", "pasarela", hasta, puerto, debe))
+                   prueba_intento("socio", "cajeros", hasta, puerto, debe))
         anotar("socio", "una sucursal NO llega a la red del socio",
-               prueba_intento("socio", "pc-suc1", "pasarela", None, False))
+               prueba_intento("socio", "pc-suc1", "cajeros", None, False))
         # Los cortes van al final: mueven la red.
         for corte in CORTES:
             medir_corte(*corte)

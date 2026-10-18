@@ -14,8 +14,8 @@ iptables -A BORDE -d 10.10.10.10 -p tcp --dport 443 -m conntrack --ctstate NEW -
 iptables -A BORDE -m comment --comment borde-descartado -j DROP
 
 # ── Línea dedicada del socio (eth6) ──
-# El socio, una procesadora de pagos, solo puede abrir conexiones HTTPS al
-# servidor de pagos (10.10.20.10). Nada más del banco, ni en un sentido ni en
+# El socio, una red de cajeros, solo puede abrir conexiones HTTPS al
+# servidor autorizador (10.10.20.10). Nada más del banco, ni en un sentido ni en
 # el otro: ni el socio entra a otra red, ni el banco abre conexiones hacia él.
 iptables -N SOCIO
 iptables -A FORWARD -i eth6 -j SOCIO

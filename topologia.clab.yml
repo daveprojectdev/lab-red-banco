@@ -10,7 +10,7 @@
 #     sede → isp1 (proveedor principal)
 #     cpd  → isp2 (proveedor de respaldo)
 #     isp1 y isp2 → nube, donde vive el servidor «web» de internet y un hacker
-#   el socio (procesadora de pagos) → cpd, por línea dedicada, solo al servidor de pagos
+#   el socio (red de cajeros) → cpd, por línea dedicada, solo al servidor autorizador
 #
 # El plan de direcciones está en README.md y la explicación, en docs/guia.md.
 # Las direcciones de los routers viven en su frr.conf; las de los equipos,
@@ -94,7 +94,7 @@ topology:
       exec:
         - ip route del default
 
-    # ── El socio: una procesadora de pagos con línea dedicada al centro de datos ──
+    # ── El socio: la red de cajeros automáticos, con línea dedicada al centro de datos ──
     socio:
       kind: linux
       binds:
@@ -145,8 +145,9 @@ topology:
       exec:
         - ip addr add 203.0.113.10/24 dev eth1
         - ip route replace default via 203.0.113.1
-    # El servidor de pagos del banco: el único al que llega el socio.
-    pagos:
+    # El servidor autorizador del banco, el que aprueba los retiros de los
+    # cajeros: el único al que llega el socio.
+    autorizador:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
@@ -154,8 +155,8 @@ topology:
         - ip route replace default via 10.10.20.1
         # El servidor web de la imagen (80 y 443), por si no arrancó solo.
         - sh -c "pgrep nginx >/dev/null || nginx"
-    # El servidor del socio que se conecta al de pagos.
-    pasarela:
+    # El servidor del socio que se conecta al de autorizador.
+    cajeros:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
       exec:
@@ -193,7 +194,7 @@ topology:
     - endpoints: ["isp2:eth2", "nube:eth2"]
     - endpoints: ["nube:eth3", "web:eth1"]
     - endpoints: ["nube:eth4", "hacker:eth1"]
-    # El socio y el servidor de pagos
+    # El socio y el servidor autorizador
     - endpoints: ["cpd:eth6", "socio:eth1"]
-    - endpoints: ["socio:eth2", "pasarela:eth1"]
-    - endpoints: ["cpd:eth7", "pagos:eth1"]
+    - endpoints: ["socio:eth2", "cajeros:eth1"]
+    - endpoints: ["cpd:eth7", "autorizador:eth1"]

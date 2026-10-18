@@ -1,7 +1,7 @@
 # Laboratorio de red de un banco, probado como código
 
 La red de un banco con sede central, centro de datos, dos sucursales, salida a
-internet por dos proveedores y un socio externo (una procesadora de pagos), levantada en contenedores con
+internet por dos proveedores y un socio externo (una red de cajeros), levantada en contenedores con
 [Containerlab](https://containerlab.dev) y routers [FRRouting](https://frrouting.org).
 En cada cambio, GitHub Actions revisa las configuraciones, levanta la red completa,
 comprueba que se comporta como dice el diseño (cortando enlaces y atacándola incluso) y la
@@ -23,7 +23,7 @@ con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
 | `isp1` | Proveedor principal | 100.100.0.1 | 64501 |
 | `isp2` | Proveedor de respaldo | 100.100.0.2 | 64502 |
 | `nube` | Internet, con un servidor `web` y un `hacker` | 100.100.0.100 | 64500 |
-| `socio` | Procesadora de pagos, por línea dedicada al centro de datos | 172.31.255.1 | 65200 |
+| `socio` | Red de cajeros automáticos, por línea dedicada al centro de datos | 172.31.255.1 | 65200 |
 
 - **Dentro del banco, OSPF** en un área (0). Núcleo `sede` ↔ `cpd`, costo 10. Cada
   sucursal tiene un enlace principal a la sede (costo 10) y uno de respaldo al centro de
@@ -38,8 +38,8 @@ con las preguntas de entrevista: **[docs/guia.md](docs/guia.md)**
 - **Borde con internet** (en la sede y en el centro de datos): un filtro anti-suplantación
   descarta todo paquete que diga venir de dentro del banco, y un cortafuegos con estado
   solo deja pasar respuestas a lo que el banco pidió y el HTTPS del servidor público.
-- **El socio** solo aprende por BGP la red de pagos (10.10.20.0/24) y solo puede abrir
-  HTTPS al servidor de pagos. Su red nunca se anuncia a internet.
+- **El socio** solo aprende por BGP la red del autorizador (10.10.20.0/24) y solo puede abrir
+  HTTPS al servidor autorizador. Su red nunca se anuncia a internet.
 
 Las reglas están en [`configs/sede/acceso.sh`](configs/sede/acceso.sh) y
 [`configs/cpd/acceso.sh`](configs/cpd/acceso.sh).
@@ -66,12 +66,12 @@ Las reglas están en [`configs/sede/acceso.sh`](configs/sede/acceso.sh) y
 | Usuarios de la sede 10.0.1.0/24 | sede eth4 .1 | `pc-sede` .10 |
 | Gestión 10.0.99.0/24 | sede eth5 .1 | `admin` .10 |
 | Servidores 10.10.10.0/24 | cpd eth4 .1 | `srv` .10 (HTTPS público) |
-| Pagos 10.10.20.0/24 | cpd eth7 .1 | `pagos` .10 |
+| Autorizador 10.10.20.0/24 | cpd eth7 .1 | `autorizador` .10 |
 | Sucursal 1 10.1.1.0/24 | suc1 eth3 .1 | `pc-suc1` .10 |
 | Sucursal 2 10.1.2.0/24 | suc2 eth3 .1 | `pc-suc2` .10 |
 | Internet 203.0.113.0/24 | nube eth3 .1 | `web` .10 |
 | Atacante 198.51.100.0/24 | nube eth4 .1 | `hacker` .66 |
-| Socio 192.168.50.0/24 | socio eth2 .1 | `pasarela` .10 |
+| Socio 192.168.50.0/24 | socio eth2 .1 | `cajeros` .10 |
 
 ## Las pruebas
 
@@ -94,8 +94,8 @@ prueba lo nota en vez de copiar el error.
      los puertos de los servidores (solo el 443 público responde) y se disfraza de equipo
      de la sucursal 1; se comprueba en el servidor que no llegó nada y que el filtro del
      borde contó los paquetes.
-   - **socio:** solo aprende la red de pagos, su red no sale a internet, llega al servidor
-     de pagos por HTTPS y a nada más.
+   - **socio:** solo aprende la red del autorizador, su red no sale a internet, llega al servidor
+     autorizador por HTTPS y a nada más.
    - **caidas:** se corta un enlace con pings cada 100 ms, se mide cuánto tráfico se
      pierde hasta que la red usa el respaldo, y se comprueba que vuelve sola al
      principal al reponerlo.

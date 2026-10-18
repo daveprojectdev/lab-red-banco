@@ -46,13 +46,15 @@ A esto se le llama **red como código**: la red se describe en archivos de texto
 - **isp1, isp2 y nube:** representan internet. isp1 e isp2 son los dos proveedores del
   banco, y la nube es «el resto de internet», con un servidor web al que hay que llegar y
   un **hacker** que intenta entrar.
-- **socio:** una procesadora de pagos, con línea dedicada al centro de datos. Es el caso
+- **socio:** la red de cajeros automáticos (la empresa que opera los cajeros de la red
+  interbancaria), con línea dedicada al centro de datos. Llega al **autorizador**, el
+  servidor del banco que aprueba cada retiro. Es el caso
   real de una empresa externa que da un servicio al banco: tiene que llegar a **un**
   servidor y a nada más.
 
 Cada red local tiene un **equipo de prueba** (un contenedor Linux) que hace de computadora
-de esa red: `pc-sede`, `admin`, `srv`, `pagos`, `pc-suc1`, `pc-suc2`, `web`, `hacker` y
-`pasarela` (la del socio).
+de esa red: `pc-sede`, `admin`, `srv`, `autorizador`, `pc-suc1`, `pc-suc2`, `web`, `hacker` y
+`cajeros` (la del socio).
 
 ## 3. Las piezas
 
@@ -142,10 +144,10 @@ En la sede y en el centro de datos, donde el banco toca a los proveedores, hay d
 
 Dos capas, cada una suficiente por sí sola:
 
-1. **Lo que aprende.** Por BGP, el centro de datos le enseña solo la red de pagos. El socio
+1. **Lo que aprende.** Por BGP, el centro de datos le enseña solo la red del autorizador. El socio
    no sabe que existen las sucursales, la gestión ni internet: no tiene ruta hacia ellas.
 2. **Lo que se le deja pasar.** Una regla en la línea del socio solo permite abrir HTTPS
-   al servidor de pagos. Ni el socio entra a otra cosa, ni el banco abre conexiones hacia él.
+   al servidor autorizador. Ni el socio entra a otra cosa, ni el banco abre conexiones hacia él.
 
 Y su red (192.168.50.0/24) nunca se anuncia a los proveedores: el filtro de salida hacia
 ellos solo deja pasar el bloque del banco.
@@ -187,7 +189,7 @@ puede salir del código que estás probando.
 | **alcance** | Ping entre todas las redes y a internet. | Algo que de verdad no llega. |
 | **acceso** | Las sucursales e internet no llegan a gestión; la sede y el centro de datos sí. | Una regla de cortafuegos que no se aplicó. |
 | **ataques** | El hacker no entra a gestión ni a una sucursal; de los servidores solo abre el 443; sus paquetes disfrazados no llegan, y el filtro del borde los cuenta. | Un cortafuegos abierto de más, un filtro anti-suplantación que falta. |
-| **socio** | Solo aprende la red de pagos, su red no sale a internet, llega a pagos por HTTPS y a nada más. | Un filtro de BGP flojo, una regla de la línea dedicada que deja pasar de más. |
+| **socio** | Solo aprende la red del autorizador, su red no sale a internet, llega al autorizador por HTTPS y a nada más. | Un filtro de BGP flojo, una regla de la línea dedicada que deja pasar de más. |
 | **caidas** | Se corta un enlace, se mide la pérdida, se comprueba el respaldo y la vuelta. | Un respaldo que no funciona, o que no devuelve el tráfico. |
 
 ## 7. Lo que se encontró construyéndolo
