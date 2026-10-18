@@ -125,6 +125,8 @@ topology:
       exec:
         - ip addr add 10.10.10.10/24 dev eth1
         - ip route replace default via 10.10.10.1
+        # El servidor web de la imagen (80 y 443), por si no arrancó solo.
+        - sh -c "pgrep nginx >/dev/null || nginx"
     pc-suc1:
       kind: linux
       image: ghcr.io/hellt/network-multitool:latest
@@ -150,6 +152,8 @@ topology:
       exec:
         - ip addr add 10.10.20.10/24 dev eth1
         - ip route replace default via 10.10.20.1
+        # El servidor web de la imagen (80 y 443), por si no arrancó solo.
+        - sh -c "pgrep nginx >/dev/null || nginx"
     # El servidor del socio que se conecta al de pagos.
     pasarela:
       kind: linux

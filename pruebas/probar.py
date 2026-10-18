@@ -444,6 +444,12 @@ def prueba_intento(lista: str, desde: str, hasta: str, puerto, debe_pasar: bool,
     return f
 
 
+def prueba_escuchan():
+    faltan = [f"{equipo}:{puerto}" for equipo in ("srv", "pagos") for puerto in (80, 443)
+              if ejecutar(equipo, "timeout", "3", "bash", "-c", f"</dev/tcp/127.0.0.1/{puerto}").returncode != 0]
+    return f"no escuchan: {', '.join(faltan)}" if faltan else ""
+
+
 def contador_antisuplantacion() -> int:
     total = 0
     for router in ("sede", "cpd"):
@@ -608,6 +614,8 @@ def main() -> int:
         for desde, hasta in PERMITIDOS:
             anotar("acceso", f"{desde} sí llega a la red de gestión ({EQUIPOS[hasta]})",
                    prueba_bloqueo(desde, hasta, True))
+        # Sin esto, «el puerto 80 está cerrado desde fuera» no probaría nada.
+        anotar("ataques", "los servidores sí escuchan en 80 y 443 (vistos desde ellos mismos)", prueba_escuchan)
         for que, hasta, puerto, debe in ATAQUES:
             anotar("ataques", f"el hacker intenta {que}: {'pasa' if debe else 'se lo frena'}",
                    prueba_intento("ataques", "hacker", hasta, puerto, debe, que))
