@@ -13,6 +13,10 @@ Grupos, en el orden en que corren:
 - camino: el tráfico usa el enlace y el proveedor principales (traceroute).
 - alcance: los equipos se alcanzan entre sí y llegan a internet.
 - acceso: las sucursales e internet NO llegan a la red de gestión.
+- ataques: un hacker en internet intenta entrar a gestión y a una sucursal,
+  escanea los puertos de los servidores y se disfraza de equipo del banco.
+- socio: la procesadora de pagos solo aprende y solo alcanza el servidor de
+  pagos, por HTTPS; su red no se filtra a internet.
 - caidas: se corta un enlace, se mide cuánto tráfico se pierde hasta que la
   red usa el respaldo, y se comprueba que vuelve sola al principal.
 
@@ -44,14 +48,14 @@ LAB = "banco"
 # ── El diseño ──
 
 BANCO = ["sede", "cpd", "suc1", "suc2"]
-INTERNET = ["isp1", "isp2", "nube"]
+INTERNET = ["isp1", "isp2", "nube", "socio"]  # todo lo que no es del banco
 
 LOOPBACK = {"sede": "10.255.0.1", "cpd": "10.255.0.2", "suc1": "10.255.0.11", "suc2": "10.255.0.12"}
 
 # Las redes de cada router del banco: su loopback y sus redes locales.
 REDES = {
     "sede": ["10.255.0.1/32", "10.0.1.0/24", "10.0.99.0/24"],
-    "cpd": ["10.255.0.2/32", "10.10.10.0/24"],
+    "cpd": ["10.255.0.2/32", "10.10.10.0/24", "10.10.20.0/24"],
     "suc1": ["10.255.0.11/32", "10.1.1.0/24"],
     "suc2": ["10.255.0.12/32", "10.1.2.0/24"],
 }
@@ -67,10 +71,11 @@ VECINOS = {
 # router -> {ip del vecino BGP: quién es}
 SESIONES_BGP = {
     "sede": {"100.64.1.0": "isp1", "10.255.0.2": "cpd (iBGP)"},
-    "cpd": {"100.64.2.0": "isp2", "10.255.0.1": "sede (iBGP)"},
+    "cpd": {"100.64.2.0": "isp2", "10.255.0.1": "sede (iBGP)", "172.31.0.0": "el socio"},
     "isp1": {"100.64.1.1": "el banco", "100.64.11.1": "la nube"},
     "isp2": {"100.64.2.1": "el banco", "100.64.12.1": "la nube"},
     "nube": {"100.64.11.0": "isp1", "100.64.12.0": "isp2"},
+    "socio": {"172.31.0.1": "el banco (cpd)"},
 }
 
 # (router, red, interfaz de salida esperada, por qué)
@@ -94,6 +99,9 @@ EQUIPOS = {
     "pc-suc1": "10.1.1.10",
     "pc-suc2": "10.1.2.10",
     "web": "203.0.113.10",
+    "pagos": "10.10.20.10",
+    "pasarela": "192.168.50.10",
+    "hacker": "198.51.100.66",
 }
 PINGS = [
     ("pc-suc1", "srv"),
@@ -111,6 +119,26 @@ PINGS = [
 # Regla de acceso de la sede (configs/sede/acceso.sh)
 BLOQUEOS = [("pc-suc1", "admin"), ("pc-suc2", "admin"), ("web", "admin")]
 PERMITIDOS = [("pc-sede", "admin"), ("srv", "admin")]
+
+# El hacker, desde internet: (qué intenta, hasta, puerto o None para ping, ¿debe pasar?)
+ATAQUES = [
+    ("entrar a la red de gestión", "admin", None, False),
+    ("llegar a una computadora de la sucursal 1", "pc-suc1", None, False),
+    ("hacer ping a los servidores", "srv", None, False),
+    ("abrir el puerto 80 de los servidores", "srv", 80, False),
+    ("abrir el puerto 443 de los servidores (el servicio público)", "srv", 443, True),
+    ("abrir el servidor de pagos", "pagos", 443, False),
+]
+DISFRAZ = "10.1.1.99"  # la dirección de la sucursal 1 que el hacker finge tener
+
+# El socio, desde su servidor «pasarela»: (hasta, puerto o None, ¿debe pasar?)
+SOCIO = [
+    ("pagos", 443, True),
+    ("pagos", 80, False),
+    ("srv", 443, False),
+    ("admin", None, False),
+    ("pc-suc1", None, False),
+]
 
 # Traceroute: los saltos que debe dar el paquete según el diseño.
 TRAZAS = [
@@ -141,6 +169,7 @@ NODO_DE_IP = {
     "10.254.0.8": "cpd", "10.254.0.9": "suc2",
     "100.64.1.0": "isp1", "100.64.1.1": "sede", "100.64.2.0": "isp2", "100.64.2.1": "cpd",
     "100.64.11.0": "isp1", "100.64.11.1": "nube", "100.64.12.0": "isp2", "100.64.12.1": "nube",
+    "172.31.0.0": "socio", "172.31.0.1": "cpd", "10.10.20.1": "cpd", "192.168.50.1": "socio", "198.51.100.1": "nube",
     **{ip: nodo for nodo, ip in EQUIPOS.items()},
 }
 
@@ -273,7 +302,7 @@ def ping_ok(desde: str, hasta: str) -> tuple[bool, str]:
 # ── Registro de resultados ──
 
 pruebas: list[dict] = []
-escena: dict = {"flujos": [], "cortes": [], "bloqueos": []}
+escena: dict = {"flujos": [], "cortes": [], "bloqueos": [], "ataques": [], "socio": []}
 
 
 def anotar(grupo: str, titulo: str, funcion) -> None:
@@ -392,6 +421,77 @@ def prueba_bloqueo(desde: str, hasta: str, debe_pasar: bool):
     return f
 
 
+def puerto_abierto(desde: str, hasta: str, puerto: int) -> bool:
+    """¿Se puede abrir una conexión TCP? Con bash y /dev/tcp, sin depender de nc."""
+    r = ejecutar(desde, "timeout", "3", "bash", "-c", f"</dev/tcp/{EQUIPOS[hasta]}/{puerto}")
+    return r.returncode == 0
+
+
+def prueba_intento(lista: str, desde: str, hasta: str, puerto, debe_pasar: bool, que: str = ""):
+    def f():
+        if puerto is None:
+            paso, detalle = ping_ok(desde, hasta)
+        else:
+            paso = puerto_abierto(desde, hasta, puerto)
+            detalle = f"puerto {puerto} {'abierto' if paso else 'cerrado o filtrado'}"
+        escena[lista].append({"intento": que or f"{desde} → {hasta}", "de": desde, "a": hasta, "puerto": puerto,
+                              "paso": paso, "esperado": debe_pasar, "detalle": detalle})
+        if paso and not debe_pasar:
+            return f"{desde} llegó a {hasta}{f' por el puerto {puerto}' if puerto else ''}: nada lo frenó"
+        if not paso and debe_pasar:
+            return f"{desde} no llega a {hasta}{f' por el puerto {puerto}' if puerto else ''} ({detalle})"
+        return ""
+    return f
+
+
+def contador_antisuplantacion() -> int:
+    total = 0
+    for router in ("sede", "cpd"):
+        r = ejecutar(router, "iptables", "-t", "raw", "-L", "PREROUTING", "-v", "-n", "-x")
+        for linea in r.stdout.splitlines():
+            if "anti-suplantacion" in linea:
+                total += int(linea.split()[0])
+    return total
+
+
+def probar_suplantacion() -> None:
+    """El hacker manda pings a los servidores fingiendo ser la sucursal 1. Se
+    escucha en el servidor (tcpdump) si alguno llega, y se lee el contador de la
+    regla anti-suplantación del borde."""
+    escucha = subprocess.Popen(
+        ["docker", "exec", f"clab-{LAB}-srv", "timeout", "8", "tcpdump", "-n", "-l", "-i", "eth1", "-c", "1",
+         f"icmp and src {DISFRAZ}"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    time.sleep(2)
+    antes = contador_antisuplantacion()
+    ejecutar("hacker", "ping", "-c", "3", "-W", "1", "-I", DISFRAZ, EQUIPOS["srv"])
+    capturado, _ = escucha.communicate(timeout=20)
+    frenados = contador_antisuplantacion() - antes
+    llego = f"{DISFRAZ} >" in capturado
+    escena["ataques"].append({"intento": "disfrazarse de la sucursal 1", "de": "hacker", "a": "srv", "puerto": None,
+                              "paso": llego, "esperado": False, "frenados_en_el_borde": frenados})
+    anotar("ataques", f"el hacker se disfraza de la sucursal 1 ({DISFRAZ}): sus paquetes no llegan a los servidores",
+           lambda: f"llegaron al servidor: {capturado.strip().splitlines()[-1:]}" if llego else "")
+    anotar("ataques", f"el filtro anti-suplantación del borde los frenó ({frenados} paquetes)",
+           lambda: "" if frenados >= 3 else f"el contador del filtro subió {frenados}, se esperaban al menos 3")
+
+
+def prueba_socio_aprende():
+    tabla = vtysh("socio", "show ip route bgp json")
+    aprendidas = sorted(tabla)
+    return "" if aprendidas == ["10.10.20.0/24"] else f"el socio aprende {', '.join(aprendidas) or 'nada'}; solo debía 10.10.20.0/24"
+
+
+def prueba_socio_no_se_filtra():
+    problemas = []
+    for isp in ("isp1", "isp2"):
+        datos = vtysh(isp, "show bgp ipv4 unicast 192.168.50.0/24 json")
+        if datos.get("paths"):
+            problemas.append(f"{isp} aprende la red del socio")
+    return "; ".join(problemas)
+
+
 def medir_corte(nombre, router, interfaz, desde, hasta, saltos_respaldo, max_s, ventana_s):
     """Pings cada 100 ms mientras se corta el enlace; los que se pierden dan
     cuánto tardó la red en pasarse al respaldo."""
@@ -508,6 +608,19 @@ def main() -> int:
         for desde, hasta in PERMITIDOS:
             anotar("acceso", f"{desde} sí llega a la red de gestión ({EQUIPOS[hasta]})",
                    prueba_bloqueo(desde, hasta, True))
+        for que, hasta, puerto, debe in ATAQUES:
+            anotar("ataques", f"el hacker intenta {que}: {'pasa' if debe else 'se lo frena'}",
+                   prueba_intento("ataques", "hacker", hasta, puerto, debe, que))
+        probar_suplantacion()
+        anotar("socio", "el socio solo aprende del banco la red de pagos", prueba_socio_aprende)
+        anotar("socio", "la red del socio no se anuncia a internet", prueba_socio_no_se_filtra)
+        for hasta, puerto, debe in SOCIO:
+            destino = f"{hasta}{f' por el puerto {puerto}' if puerto else ''}"
+            anotar("socio", f"el socio {'llega' if debe else 'NO llega'} a {destino}",
+                   prueba_intento("socio", "pasarela", hasta, puerto, debe))
+        anotar("socio", "una sucursal NO llega a la red del socio",
+               prueba_intento("socio", "pc-suc1", "pasarela", None, False))
+        # Los cortes van al final: mueven la red.
         for corte in CORTES:
             medir_corte(*corte)
 

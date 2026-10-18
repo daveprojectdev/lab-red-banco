@@ -41,6 +41,7 @@ class Router:
     bgp_as: int | None = None
     bgp_id: str | None = None
     vecinos: dict[str, int] = field(default_factory=dict)  # ip -> remote-as
+    filtros_salida: set[str] = field(default_factory=set)  # ips con route-map de salida
 
 
 def leer(ruta: Path) -> Router:
@@ -77,6 +78,8 @@ def leer(ruta: Path) -> Router:
             r.bgp_id = m[1]
         elif bloque == "router" and (m := re.match(r"neighbor (\S+) remote-as (\d+)", texto)):
             r.vecinos[m[1]] = int(m[2])
+        elif bloque == "router" and (m := re.match(r"neighbor (\S+) route-map \S+ out", texto)):
+            r.filtros_salida.add(m[1])
     return r
 
 
@@ -195,6 +198,21 @@ def vecinos_bgp_reciprocos(routers):
     return problemas
 
 
+BANCO_AS = 65100
+
+
+def ebgp_del_banco_con_filtro(routers):
+    """Todo vecino eBGP del banco (un proveedor, el socio) tiene un filtro de
+    salida. Sin él, el banco podría anunciar lo que no es suyo: las rutas de un
+    proveedor al otro, o la red del socio a internet."""
+    return [
+        f"{r.nombre}: el vecino {ip} (AS {remoto}) no tiene route-map de salida"
+        for r in routers.values() if r.bgp_as == BANCO_AS
+        for ip, remoto in r.vecinos.items()
+        if remoto != BANCO_AS and ip not in r.filtros_salida
+    ]
+
+
 REVISIONES = [
     ("Ninguna dirección IP está repetida", direcciones_unicas),
     ("Cada router tiene un router-id único, igual a su loopback", identificadores_unicos),
@@ -202,6 +220,7 @@ REVISIONES = [
     ("OSPF igual en las dos puntas de cada enlace: área, costo y tipo", ospf_igual_en_las_dos_puntas),
     ("Las redes locales están en OSPF como pasivas", redes_locales_pasivas),
     ("Cada vecino BGP existe, tiene el AS esperado y responde de vuelta", vecinos_bgp_reciprocos),
+    ("Cada vecino eBGP del banco tiene filtro de salida", ebgp_del_banco_con_filtro),
 ]
 
 

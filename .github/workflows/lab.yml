@@ -76,14 +76,17 @@ jobs:
       - name: Estado de los routers (para depurar)
         if: ${{ always() && steps.revision.outcome == 'success' }}
         run: |
-          for r in sede cpd suc1 suc2 isp1 isp2 nube; do
+          for r in sede cpd suc1 suc2 isp1 isp2 nube socio; do
             echo "::group::$r"
             docker exec "clab-banco-$r" vtysh -c "show ip ospf neighbor" -c "show bgp summary" -c "show ip route" || true
             echo "::endgroup::"
           done
-          echo "::group::regla de acceso (sede)"
-          docker exec clab-banco-sede iptables -L FORWARD -n -v || true
-          echo "::endgroup::"
+          for r in sede cpd; do
+            echo "::group::reglas de acceso ($r)"
+            docker exec "clab-banco-$r" iptables -L -n -v || true
+            docker exec "clab-banco-$r" iptables -t raw -L PREROUTING -n -v || true
+            echo "::endgroup::"
+          done
 
       - name: Informe
         if: always()

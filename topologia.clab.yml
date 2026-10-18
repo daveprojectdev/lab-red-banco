@@ -9,7 +9,8 @@
 #   internet:
 #     sede → isp1 (proveedor principal)
 #     cpd  → isp2 (proveedor de respaldo)
-#     isp1 y isp2 → nube, donde vive el servidor «web» de internet
+#     isp1 y isp2 → nube, donde vive el servidor «web» de internet y un hacker
+#   el socio (procesadora de pagos) → cpd, por línea dedicada, solo al servidor de pagos
 #
 # El plan de direcciones está en README.md y la explicación, en docs/guia.md.
 # Las direcciones de los routers viven en su frr.conf; las de los equipos,
@@ -45,7 +46,10 @@ topology:
         - configs/daemons:/etc/frr/daemons
         - configs/vtysh.conf:/etc/frr/vtysh.conf
         - configs/cpd/frr.conf:/etc/frr/frr.conf
+        - configs/cpd/acceso.sh:/etc/frr/acceso.sh
       exec:
+        - apk add --no-cache -q iptables
+        - sh /etc/frr/acceso.sh
         - ip route del default
     suc1:
       kind: linux
@@ -90,6 +94,16 @@ topology:
       exec:
         - ip route del default
 
+    # ── El socio: una procesadora de pagos con línea dedicada al centro de datos ──
+    socio:
+      kind: linux
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/socio/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip route del default
+
     # ── Equipos de prueba: uno por red local ──
     # Todo su tráfico va por su router (eth1); eth0 es la gestión de
     # Containerlab y deja de usarse.
@@ -129,6 +143,29 @@ topology:
       exec:
         - ip addr add 203.0.113.10/24 dev eth1
         - ip route replace default via 203.0.113.1
+    # El servidor de pagos del banco: el único al que llega el socio.
+    pagos:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 10.10.20.10/24 dev eth1
+        - ip route replace default via 10.10.20.1
+    # El servidor del socio que se conecta al de pagos.
+    pasarela:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 192.168.50.10/24 dev eth1
+        - ip route replace default via 192.168.50.1
+    # Un atacante en internet. La segunda dirección (10.1.1.99, que parece de
+    # la sucursal 1) es su disfraz para el ataque de suplantación.
+    hacker:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      exec:
+        - ip addr add 198.51.100.66/24 dev eth1
+        - ip addr add 10.1.1.99/32 dev eth1
+        - ip route replace default via 198.51.100.1
 
   links:
     # Núcleo
@@ -151,3 +188,8 @@ topology:
     - endpoints: ["isp1:eth2", "nube:eth1"]
     - endpoints: ["isp2:eth2", "nube:eth2"]
     - endpoints: ["nube:eth3", "web:eth1"]
+    - endpoints: ["nube:eth4", "hacker:eth1"]
+    # El socio y el servidor de pagos
+    - endpoints: ["cpd:eth6", "socio:eth1"]
+    - endpoints: ["socio:eth2", "pasarela:eth1"]
+    - endpoints: ["cpd:eth7", "pagos:eth1"]
